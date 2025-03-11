@@ -18,7 +18,9 @@ import { Prompt } from './utils/openAI'
 import { ListDisplayFormat } from './components/Answer'
 
 import GraphologueLogo from './media/graphologue.png'
-import { userProvidedAPIKey } from './constants'
+import { userProvidedAPIKey, LLM_PROVIDER } from './constants'
+import { createLLMProvider } from './utils/llmFactory'
+import { LLMProvider } from './utils/llmProvider'
 
 export interface OriginRange {
   start: number
@@ -135,10 +137,18 @@ export const ChatApp = () => {
   >([])
 
   const [debugMode, setDebugMode] = useState<boolean>(false)
+  const [llmProvider, setLlmProvider] = useState<LLMProvider | null>(null)
 
-  const [keyHidden, setKeyHidden] = useState<boolean>(false)
-  const [openAIKeyInput, setOpenAIKeyInput] = useState<string>('')
-  const [openAIKey, setOpenAIKey] = useState<string>('')
+  // Initialize LLM provider automatically for Ollama
+  useEffect(() => {
+    if (LLM_PROVIDER.type.toLowerCase() === 'ollama') {
+      const provider = createLLMProvider(LLM_PROVIDER.type, {
+        apiKey: 'dummy-key', // Ollama doesn't need an API key
+        baseUrl: LLM_PROVIDER.config.baseUrl,
+      })
+      setLlmProvider(provider)
+    }
+  }, [])
 
   // componentDidMount
   useEffect(() => {
@@ -158,6 +168,7 @@ export const ChatApp = () => {
       value={{
         questionsAndAnswersCount: questionsAndAnswers.length,
         setQuestionsAndAnswers,
+        llmProvider,
       }}
     >
       <DebugModeContext.Provider value={{ debugMode, setDebugMode }}>
@@ -179,68 +190,12 @@ export const ChatApp = () => {
               <a href="https://creativity.ucsd.edu">creativity lab</a>
             </div>
           </div>
-          {openAIKey.length === 0 ? (
-            <div className="interchange-item">
-              <div className="openai-api-key-question-box question-item interchange-component">
-                <textarea
-                  className="question-textarea openai-api-key-textarea"
-                  placeholder={`Welcome to Graphologue! To play with it, please paste you OpenAI API key here. If you'd like to change it, please refresh the page. We do not store your keys.\n\nEach question will result in 6–10 requests and may cost up to around 0.2 USD for GPT-4.`}
-                  rows={6}
-                  value={openAIKeyInput}
-                  onChange={e => {
-                    setOpenAIKeyInput(e.target.value)
-                  }}
-                  style={
-                    openAIKeyInput.length > 0 && keyHidden
-                      ? {
-                          color: 'transparent',
-                          textShadow: '0 0 0.3rem rgba(0,0,0,0.5)',
-                        }
-                      : {}
-                  }
-                />
-
-                <button
-                  className="bar-button"
-                  onClick={() => {
-                    setKeyHidden(!keyHidden)
-                  }}
-                >
-                  {keyHidden ? (
-                    <VisibilityOffRoundedIcon />
-                  ) : (
-                    <VisibilityRoundedIcon />
-                  )}
-                </button>
-                <button
-                  className="bar-button"
-                  onClick={() => {
-                    setOpenAIKey(openAIKeyInput)
-                    userProvidedAPIKey.current = openAIKeyInput
-                  }}
-                >
-                  <FileUploadRoundedIcon />
-                </button>
-              </div>
-              <div className="public-information">
-                <a
-                  href="https://www.netlify.com"
-                  style={{
-                    fontSize: '0.5rem',
-                  }}
-                >
-                  Deploys by Netlify
-                </a>
-              </div>
-            </div>
-          ) : (
-            questionsAndAnswers.map((questionAndAnswer, index) => (
-              <Interchange
-                key={`interchange-${questionAndAnswer.id}`}
-                data={questionAndAnswer}
-              />
-            ))
-          )}
+          {questionsAndAnswers.map((questionAndAnswer, index) => (
+            <Interchange
+              key={`interchange-${questionAndAnswer.id}`}
+              data={questionAndAnswer}
+            />
+          ))}
         </div>
       </DebugModeContext.Provider>
     </ChatContext.Provider>

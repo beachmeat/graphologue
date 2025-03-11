@@ -55,3 +55,15 @@ export const userProvidedAPIKey: {
 } = {
   current: null,
 }
+
+export const LLM_PROVIDER = {
+  type: process.env.REACT_APP_LLM_PROVIDER || 'ollama',
+  models: {
+    smarter: 'llama2',
+    faster: 'llama2',
+  },
+  config: {
+    baseUrl: process.env.REACT_APP_LLM_BASE_URL || 'http://localhost:11434',
+    defaultModel: 'llama2',
+  },
+}

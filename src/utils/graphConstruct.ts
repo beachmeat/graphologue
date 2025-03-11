@@ -65,18 +65,17 @@ export const constructGraph = (
   // https://github.com/dagrejs/dagre/wiki#an-example-layout
   graph.setGraph({
     rankdir: 'LR',
-    // align: 'UL',
-    ranksep: 90, // !
-    nodesep: 15, // !
-    // ranker: 'longest-path',
+    ranksep: 90,
+    nodesep: 15,
   })
   graph.setDefaultEdgeLabel(function () {
     return ''
   })
 
-  // for (const nId of graph.nodes()) {
-  //   graph.removeNode(nId)
-  // }
+  // Add null checks for arrays
+  if (!rawNodeEntities || !rawEdgeEntities || !nodeEntities || !edgeEntities) {
+    return []
+  }
 
   rawNodeEntities.forEach(nodeE => {
     // check if the node is nodeEntities
@@ -120,7 +119,6 @@ export const constructGraph = (
 
   // ! compute
   dagre.layout(graph)
-  // console.log('* graph layout')
 
   // print the graph
   const nodes: {

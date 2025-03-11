@@ -1,3 +1,4 @@
+import React from 'react'
 import {
   ChangeEvent,
   ForwardedRef,
@@ -353,8 +354,10 @@ export const CustomNode = memo(
                         styleBackground === styles.nodeColorDefaultWhite
                           ? '#333333'
                           : tinycolor(styleBackground).isDark()
-                          ? 'white'
-                          : tinycolor(styleBackground).darken(45).toHexString(),
+                            ? 'white'
+                            : tinycolor(styleBackground)
+                                .darken(45)
+                                .toHexString(),
                     }
               }
             >

@@ -44,12 +44,13 @@ import {
   removeLastBracket,
 } from '../utils/responseProcessing'
 import { ListDisplayFormat } from './Answer'
-import { debug } from '../constants'
+import { debug, LLM_PROVIDER } from '../constants'
+import { LLMProvider } from '../utils/llmProvider'
 
 export type FinishedAnswerObjectParsingTypes = 'summary' | 'slide'
 
 export const Question = () => {
-  const { questionsAndAnswersCount, setQuestionsAndAnswers } =
+  const { questionsAndAnswersCount, setQuestionsAndAnswers, llmProvider } =
     useContext(ChatContext)
   const {
     questionAndAnswer: {
@@ -74,7 +75,7 @@ export const Question = () => {
 
   /* -------------------------------------------------------------------------- */
 
-  const canAsk = question.length > 0 && !modelAnswering
+  const canAsk = question.length > 0 && !modelAnswering && llmProvider
 
   /* -------------------------------------------------------------------------- */
 
@@ -203,12 +204,6 @@ export const Question = () => {
           block: 'start',
           inline: 'nearest',
         })
-      // if (questionItemRef.current) {
-      //   // find element with className .answer-wrapper and data-id = id
-      //   questionItemRef.current.scrollIntoView({
-      //     behavior: 'smooth',
-      //   })
-      // }
     }, 1000)
   }, [id, question, setQuestionsAndAnswers])
 
@@ -240,428 +235,159 @@ export const Question = () => {
             } else return a
           },
         )
-
-      // setQuestionsAndAnswers(prevQsAndAs =>
-      //   helpSetQuestionAndAnswer(prevQsAndAs, id, {
-      //     answerObjects: answerStorage.current.answerObjects,
-      //   })
-      // )
     },
     [],
   )
 
-  /* -------------------------------------------------------------------------- */
+  const handleKeyDown = useCallback(
+    async (event: KeyboardEvent) => {
+      if (event.key === 'Enter' && !event.shiftKey && canAsk) {
+        event.preventDefault()
 
-  const handleParsingCompleteAnswerObject = useCallback(
-    async (answerObjectId: string) => {
-      const answerObjectToCorrect = answerStorage.current.answerObjects.find(
-        a => a.id === answerObjectId,
-      )
-      if (!answerObjectToCorrect) return
+        _groundRest()
 
-      // self correction
-      const correctedOriginTextContent = await handleSelfCorrection(
-        answerObjectToCorrect,
-      )
-      answerStorage.current.answer = answerStorage.current.answer.replace(
-        answerObjectToCorrect.originText.content,
-        correctedOriginTextContent,
-      )
-      answerObjectToCorrect.originText.content = correctedOriginTextContent
-      handleUpdateRelationshipEntities(
-        correctedOriginTextContent,
-        answerObjectId,
-      )
+        // ! stream graph
+        const prompts = predefinedPrompts.initialAsk(question)
 
-      // set corrected answer object
-      setQuestionsAndAnswers(prevQsAndAs =>
-        helpSetQuestionAndAnswer(prevQsAndAs, id, {
-          answer: answerStorage.current.answer,
-          answerObjects: answerStorage.current.answerObjects, // TODO account for answerObjectSynced changes
-        }),
-      )
+        try {
+          await llmProvider.streamCompletion(
+            prompts,
+            LLM_PROVIDER.models.smarter,
+            (
+              data: OpenAIChatCompletionResponseStream,
+              freshStream: boolean,
+            ) => {
+              const content = getTextFromStreamResponse(data)
+              if (content) {
+                answerStorage.current.answer += content
+                setQuestionsAndAnswers(prevQsAndAs =>
+                  helpSetQuestionAndAnswer(prevQsAndAs, id, {
+                    answer: answerStorage.current.answer,
+                  }),
+                )
+              }
+            },
+            true,
+          )
 
-      /* -------------------------------------------------------------------------- */
-      // parse slides and summary
-      const answerObject = answerStorage.current.answerObjects.find(
-        a => a.id === answerObjectId,
-      )
-      if (!answerObject) return
+          // ! parse graph
+          const answerObjectId = getAnswerObjectId()
+          const answerObject = {
+            id: answerObjectId,
+            originText: {
+              content: answerStorage.current.answer,
+              nodeEntities: [],
+              edgeEntities: [],
+            },
+            summary: {
+              content: '',
+              nodeEntities: [],
+              edgeEntities: [],
+            },
+            slide: {
+              content: '',
+            },
+            answerObjectSynced: {
+              listDisplay: 'text' as ListDisplayFormat,
+              saliencyFilter: 'high' as RelationshipSaliency,
+              collapsedNodes: [],
+              sentencesBeingCorrected: [],
+            },
+            complete: false,
+          }
 
-      const parsingResults: {
-        [key in FinishedAnswerObjectParsingTypes]: string
-      } = {
-        summary: '',
-        slide: '',
-      }
+          answerStorage.current.answerObjects.push(answerObject)
 
-      let parsingError = false
-      await Promise.all(
-        (['summary', 'slide'] as FinishedAnswerObjectParsingTypes[]).map(
-          async (parsingType: FinishedAnswerObjectParsingTypes) => {
-            if (parsingError) return
+          setQuestionsAndAnswers(prevQsAndAs =>
+            helpSetQuestionAndAnswer(prevQsAndAs, id, {
+              answerObjects: answerStorage.current.answerObjects,
+              modelStatus: {
+                modelAnswering: false,
+                modelParsing: true,
+                modelAnsweringComplete: true,
+                modelParsingComplete: false,
+                modelError: false,
+                modelInitialPrompts: prompts,
+              },
+            }),
+          )
 
-            const parsingSummary = parsingType === 'summary'
+          // ! parse graph
+          const parsingPrompts = predefinedPrompts.initialAsk(
+            answerStorage.current.answer,
+          )
 
-            // ! request
-            const parsingResult = await parseOpenAIResponseToObjects(
-              predefinedPromptsForParsing[parsingType](
-                parsingSummary
-                  ? answerObject.originText.content
-                  : removeAnnotations(answerObject.originText.content),
-              ),
-              debug ? models.faster : models.smarter,
+          try {
+            const parsingResponse = await llmProvider.getCompletion(
+              parsingPrompts,
+              LLM_PROVIDER.models.smarter,
             )
 
-            if (parsingResult.error) {
-              handleResponseError(parsingResult)
-              parsingError = true
-              return
+            const parsingText = getTextFromModelResponse(parsingResponse)
+            if (parsingText) {
+              const cleanedContent = removeAnnotations(parsingText)
+              handleUpdateRelationshipEntities(cleanedContent, answerObjectId)
+
+              setQuestionsAndAnswers(prevQsAndAs =>
+                helpSetQuestionAndAnswer(prevQsAndAs, id, {
+                  answerObjects: answerStorage.current.answerObjects,
+                  modelStatus: {
+                    modelAnswering: false,
+                    modelParsing: false,
+                    modelAnsweringComplete: true,
+                    modelParsingComplete: true,
+                    modelError: false,
+                    modelInitialPrompts: prompts,
+                  },
+                }),
+              )
             }
-
-            parsingResults[parsingType] =
-              getTextFromModelResponse(parsingResult)
-          },
-        ),
-      )
-
-      if (!parsingError) {
-        // ! complete answer object
-        answerStorage.current.answerObjects =
-          answerStorage.current.answerObjects.map((a: AnswerObject) => {
-            if (a.id === answerObjectId) {
-              return {
-                ...a,
-                summary: {
-                  content: parsingResults.summary,
-                  nodeEntities: nodeIndividualsToNodeEntities(
-                    parseNodes(parsingResults.summary, answerObjectId),
-                  ),
-                  edgeEntities: parseEdges(
-                    parsingResults.summary,
-                    answerObjectId,
-                  ),
-                },
-                slide: {
-                  content: cleanSlideResponse(parsingResults.slide),
-                },
-                complete: true,
-              }
-            } else return a
-          })
-
-        setQuestionsAndAnswers(prevQsAndAs =>
-          helpSetQuestionAndAnswer(prevQsAndAs, id, {
-            answerObjects: answerStorage.current.answerObjects,
-            // modelStatus: {
-            //   modelAnswering: false,
-            //   modelAnsweringComplete: true,
-            //   modelParsing: false,
-            //   modelParsingComplete: true,
-            // },
-          }),
-        )
-      }
-    },
-    [
-      handleResponseError,
-      handleSelfCorrection,
-      handleUpdateRelationshipEntities,
-      id,
-      setQuestionsAndAnswers,
-    ],
-  )
-
-  const handleStreamRawAnswer = useCallback(
-    (data: OpenAIChatCompletionResponseStream, freshStream = true) => {
-      const deltaContent = trimLineBreaks(getTextFromStreamResponse(data))
-      if (!deltaContent) return
-
-      const aC = answerStorage.current
-
-      // this is the first response streamed
-      const isFirstAnswerObject = aC.answerObjects.length === 0
-      const hasLineBreaker = deltaContent.includes('\n')
-
-      let targetLastAnswerObjectId = aC.answerObjects.length
-        ? aC.answerObjects[aC.answerObjects.length - 1].id
-        : null
-
-      // ! ground truth of the response
-      aC.answer += deltaContent
-      // sentenceParser.current.updateResponse(aC.answer)
-
-      const _appendContentToLastAnswerObject = (content: string) => {
-        const lastObject = aC.answerObjects[aC.answerObjects.length - 1]
-        lastObject.originText.content += content
-      }
-
-      const preparedNewObject = {
-        id: getAnswerObjectId(), // add id
-        summary: {
-          content: '',
-          nodeEntities: [],
-          edgeEntities: [],
-        }, // add summary
-        slide: {
-          content: '',
-        }, // pop empty slide
-        answerObjectSynced: {
-          listDisplay: 'original' as ListDisplayFormat,
-          saliencyFilter: 'high' as RelationshipSaliency,
-          collapsedNodes: [],
-          sentencesBeingCorrected: [],
-        },
-        complete: false,
-      }
-
-      // break answer into parts
-      if (isFirstAnswerObject) {
-        // * new answer object
-        aC.answerObjects.push({
-          ...preparedNewObject,
-          originText: {
-            content: deltaContent,
-            nodeEntities: [],
-            edgeEntities: [],
-          },
-        })
-
-        targetLastAnswerObjectId = preparedNewObject.id
-        ////
-      } else if (hasLineBreaker) {
-        // add a new answer object
-        const paragraphs = deltaContent
-          .split('\n')
-          .map(c => c.trim())
-          .filter(c => c.length)
-
-        let paragraphForNewAnswerObject = ''
-
-        if (paragraphs.length === 2) {
-          paragraphForNewAnswerObject = paragraphs[1]
-          ////
-          // if (!isFirstAnswerObject)
-          _appendContentToLastAnswerObject(paragraphs[0])
-        } else if (paragraphs.length === 1) {
-          if (deltaContent.indexOf('\n') === 0)
-            paragraphForNewAnswerObject = paragraphs[0]
-          else {
-            // if (!isFirstAnswerObject)
-            _appendContentToLastAnswerObject(paragraphs[0])
+          } catch (error) {
+            handleResponseError(error)
           }
-        } else {
-          // do nothing now
+        } catch (error) {
+          handleResponseError(error)
         }
-
-        // * new answer object
-        aC.answerObjects.push({
-          ...preparedNewObject,
-          // originRange: {
-          //   start: aC.answer.length - paragraphForNewAnswerObject.length,
-          //   end: aC.answer.length,
-          // }, // from text to ranges
-          originText: {
-            content: paragraphForNewAnswerObject,
-            nodeEntities: [],
-            edgeEntities: [],
-          }, // add raw text
-        })
-
-        // ! finish a previous answer object
-        // as the object is finished, we can start parsing it
-        // adding summary, slide, relationships
-        handleParsingCompleteAnswerObject(
-          aC.answerObjects[aC.answerObjects.length - 2].id,
-        )
-
-        targetLastAnswerObjectId = preparedNewObject.id
-        ////
-      } else {
-        // append to last answer object
-        _appendContentToLastAnswerObject(deltaContent)
       }
-
-      // ! parse relationships right now
-      const lastParagraph = aC.answer.split('\n').slice(-1)[0]
-      if (targetLastAnswerObjectId)
-        handleUpdateRelationshipEntities(
-          lastParagraph,
-          targetLastAnswerObjectId,
-        )
-
-      // parse sentence into graph RIGHT NOW
-      // if (deltaContent.includes('.')) {
-      //   // get the last sentence from answerStorage.current.answer
-      //   const dotAndBefore = deltaContent.split('.').slice(-2)[0] + '.'
-      //   const lastSentencePartInPrevAnswerStorage = prevAnswerStorage
-      //     .split('.')
-      //     .slice(-2)[0]
-      //   const lastSentence = lastSentencePartInPrevAnswerStorage + dotAndBefore
-
-      //   // parse it
-      //   if (prevLastAnswerObjectId) {
-      //     sentenceParser.current.addJob(lastSentence, prevLastAnswerObjectId)
-      //   }
-      // }
-
-      // * finally, update the state
-      setQuestionsAndAnswers(prevQsAndAs =>
-        helpSetQuestionAndAnswer(prevQsAndAs, id, {
-          answer: aC.answer,
-          answerObjects: aC.answerObjects, // TODO account for answerObjectSynced changes
-        }),
-      )
-
-      // scroll
-      // TODO
-      /*
-      const lastAnswerObject = aC.answerObjects[aC.answerObjects.length - 1]
-      const answerObjectElement = document.querySelector(
-        `.answer-text[data-id="${lastAnswerObject.id}"]`
-      )
-      if (answerObjectElement) {
-        answerObjectElement.scrollIntoView({
-          behavior: 'smooth',
-          block: 'end',
-        })
-      }
-      */
     },
     [
-      handleParsingCompleteAnswerObject,
+      canAsk,
+      handleResponseError,
       handleUpdateRelationshipEntities,
       id,
+      llmProvider,
+      question,
       setQuestionsAndAnswers,
+      _groundRest,
     ],
   )
-
-  // ! ASK
-  const handleAskStream = useCallback(async () => {
-    // * ground reset
-    _groundRest()
-
-    // * actual ask model
-    const initialPrompts = predefinedPrompts.initialAsk(question)
-    // ! request
-    await streamOpenAICompletion(
-      initialPrompts,
-      debug ? models.faster : models.smarter,
-      handleStreamRawAnswer,
-      true,
-    )
-    // * model done raw answering
-    console.log('model done raw answering')
-    setQuestionsAndAnswers(prevQsAndAs =>
-      helpSetQuestionAndAnswer(prevQsAndAs, id, {
-        modelStatus: {
-          modelAnswering: false,
-          modelAnsweringComplete: true,
-        },
-      }),
-    )
-
-    // try to finish the last answer object
-    const lastAnswerObject =
-      answerStorage.current.answerObjects[
-        answerStorage.current.answerObjects.length - 1
-      ]
-    if (lastAnswerObject)
-      await handleParsingCompleteAnswerObject(lastAnswerObject.id)
-
-    // * model done parsing
-    console.log('model done parsing')
-
-    // * start self correction
-    // console.log('model start self correction')
-    // await handleSelfCorrection(
-    //   answerStorage.current.answer,
-    //   answerStorage.current.answerObjects
-    // )
-
-    setQuestionsAndAnswers(prevQsAndAs =>
-      helpSetQuestionAndAnswer(prevQsAndAs, id, {
-        modelStatus: {
-          modelParsing: false,
-          modelParsingComplete: true,
-          modelInitialPrompts: [...initialPrompts.map(p => ({ ...p }))],
-        },
-      }),
-    )
-  }, [
-    _groundRest,
-    handleParsingCompleteAnswerObject,
-    handleStreamRawAnswer,
-    id,
-    question,
-    setQuestionsAndAnswers,
-  ])
-
-  /* -------------------------------------------------------------------------- */
-
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      // if cmd + enter
-      if (e.key === 'Enter' && e.metaKey) {
-        if (canAsk) handleAskStream()
-      }
-    },
-    [canAsk, handleAskStream],
-  )
-
-  const handleDeleteInterchange = useCallback(() => {
-    setQuestionsAndAnswers(prevQsAndAs =>
-      prevQsAndAs.filter(qAndA => qAndA.id !== id),
-    )
-  }, [id, setQuestionsAndAnswers])
 
   return (
-    <div
-      ref={questionItemRef}
-      className="question-item interchange-component drop-up"
-    >
-      {activated ? (
-        <>
-          <textarea
-            ref={textareaRef}
-            className="question-textarea"
-            value={question}
-            placeholder={'ask a question'}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            rows={1}
-          />
-          <button
-            disabled={!canAsk}
-            className="bar-button"
-            onClick={handleAskStream}
-          >
-            {modelAnswering ? (
-              <HourglassTopRoundedIcon className="loading-icon" />
-            ) : (
-              <AutoFixHighRoundedIcon />
-            )}
-          </button>
-          <button
-            disabled={questionsAndAnswersCount < 2}
-            className="bar-button"
-            onClick={handleDeleteInterchange}
-          >
-            <ClearRoundedIcon />
-          </button>
-        </>
-      ) : (
-        <span
-          className="new-question-hint"
-          onClick={() => {
-            setActivated(true)
-          }}
-        >
-          add question
-        </span>
+    <div className="question-item" ref={questionItemRef}>
+      <textarea
+        ref={textareaRef}
+        className="question-textarea"
+        placeholder="Ask a question"
+        rows={1}
+        value={question}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        disabled={!llmProvider}
+      />
+      {modelAnswering && (
+        <div className="question-item-loading">
+          <HourglassTopRoundedIcon />
+        </div>
       )}
       {modelError && (
-        <div className="error-message">Got an error, please try again.</div>
+        <div className="question-item-error">
+          <ClearRoundedIcon />
+        </div>
+      )}
+      {!modelAnswering && !modelError && canAsk && (
+        <div className="question-item-send">
+          <AutoFixHighRoundedIcon />
+        </div>
       )}
     </div>
   )

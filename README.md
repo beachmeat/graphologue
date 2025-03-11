@@ -33,7 +33,7 @@ Peiling Jiang*, Jude Rayan*, Steven P. Dow, Haijun Xia _(\* Both authors contrib
 
 **Please cite this paper if you used the code or prompts in this repository.**
 
-> Peiling Jiang, Jude Rayan, Steven P. Dow, and Haijun Xia. 2023. Graphologue: Exploring Large Language Model Responses with Interactive Diagrams. In The 36th Annual ACM Symposium on User Interface Software and Technology (UIST ’23), October 29-November 1, 2023, San Francisco, CA, USA. ACM, New York, NY, USA, 20 pages. https://doi.org/10.1145/3586183.3606737
+> Peiling Jiang, Jude Rayan, Steven P. Dow, and Haijun Xia. 2023. Graphologue: Exploring Large Language Model Responses with Interactive Diagrams. In The 36th Annual ACM Symposium on User Interface Software and Technology (UIST '23), October 29-November 1, 2023, San Francisco, CA, USA. ACM, New York, NY, USA, 20 pages. https://doi.org/10.1145/3586183.3606737
 
 ```bibtex
 @inproceedings{jiang2023graphologue,
